@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <poll.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -78,6 +79,11 @@ DECLARE(int, fcntl, int fd, int cmd, ...);
 DECLARE(int, getaddrinfo, const char *name, const char *service, const struct addrinfo *req, struct addrinfo **pai);
 DECLARE(void, freeaddrinfo, struct addrinfo *ai);
 DECLARE(const char *, gai_strerror, int ecode);
+
+DECLARE(ssize_t, read, int fd, void *buf, size_t count);
+DECLARE(ssize_t, write, int fd, const void *buf, size_t count);
+DECLARE(int, select, int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
+DECLARE(int, poll, struct pollfd *fds, nfds_t nfds, int timeout);
 
 // not ported to XIA, remapped for warning purposes
 DECLARE(ssize_t, sendmsg, int fd, const struct msghdr *message, int flags);
@@ -196,6 +202,11 @@ void __attribute__ ((constructor)) xwrap_init(void)
 	GET_FCN(freeaddrinfo);
 	GET_FCN(gai_strerror);
 	GET_FCN(getnameinfo);
+
+	GET_FCN(read);
+	GET_FCN(write);
+	GET_FCN(select);
+	GET_FCN(poll);
 }
 
 
@@ -538,7 +549,7 @@ ssize_t recv(int fd, void *buf, size_t n, int flags)
 {
 	int rc;
 	TRACE();
-
+printf("recv %d %d\n", fd, n);
 	if (shouldWrap(fd)) {
 		XIAIFY();
 		markWrapped(fd);
@@ -547,6 +558,8 @@ ssize_t recv(int fd, void *buf, size_t n, int flags)
 	} else {
 		rc = __real_recv(fd, buf, n, flags);
 	}
+
+	printf("recv exiting %d %s\n", rc, strerror(errno));
 	return rc;
 }
 
@@ -616,6 +629,58 @@ ssize_t recvfrom(int fd, void *buf, size_t n, int flags, struct sockaddr *addr, 
 	}
 
 	return rc;
+}
+
+ssize_t read(int fd, void *buf, size_t count)
+{
+	size_t rc;
+
+	TRACE();
+
+	if (isXsocket(fd)) {
+		XIAIFY();
+
+		markWrapped(fd);
+		rc = Xrecv(fd, buf, count, 0);
+		markUnwrapped(fd);
+
+	} else {
+		rc = __real_read(fd, buf, count);
+	}
+	return rc;
+}
+
+ssize_t write(int fd, const void *buf, size_t count)
+{
+	size_t rc;
+
+	TRACE();
+
+	if (isXsocket(fd)) {
+		XIAIFY();
+
+		markWrapped(fd);
+		rc = Xsend(fd, buf, count, 0);
+		markUnwrapped(fd);
+
+	} else {
+		rc = __real_write(fd, buf, count);
+	}
+	return rc;
+}
+
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout)
+{
+//	TRACE();
+
+	return __real_select(nfds, readfds, writefds, exceptfds, timeout);
+}
+
+int poll(struct pollfd *fds, nfds_t nfds, int timeout)
+{
+	TRACE();
+
+	return __real_poll(fds, nfds, timeout);
 }
 
 ssize_t sendmsg(int fd, const struct msghdr *message, int flags)
@@ -846,7 +911,7 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 		int family = AF_INET;
 		int flags = 0;
 		int port;
-		socklen_t len;
+		socklen_t len = sizeof(sax);
 
 		// FIXME: this assumes that name is an IP string
 		//  instead of a name
@@ -863,9 +928,12 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 			protocol = hints->ai_protocol;
 		}
 
+
+
 		if (service) {
 			port = strtol(service, NULL, 10);
-			if (errno) {
+	printf("serv ice:%d\n", port);
+			if (errno == EINVAL) {
 				// FIXME:is this threadsafe???
 				struct servent *serv = getservbyname(service, NULL);
 				if (serv) {
@@ -880,13 +948,14 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 		}
 
 		sprintf(s, "%s-%d", name, port);
-
+printf("addr=%s\n", s);
 		if (XgetDAGbyName(s, &sax, &len) < 0) {
 			printf("name lookup error\n");
 			errno = EAI_NONAME;
 			return -1;
 		}
-
+Graph g(&sax);
+printf("found name\n%s\n", g.dag_string().c_str());
 		struct addrinfo *ai = (struct addrinfo *)calloc(sizeof(struct addrinfo), 1);
 
 		// fill in the blanks
@@ -948,6 +1017,8 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 
 	return rc;
 }
+
+
 
 void freeaddrinfo (struct addrinfo *ai)
 {
