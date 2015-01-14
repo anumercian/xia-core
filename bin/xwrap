@@ -42,7 +42,7 @@ EOH
 }
 
 
-while getopts "o:tvwx" opt; do
+while getopts "o:tvwxX" opt; do
 	case $opt in
 		o)
 			export XWRAP_LOGFILE=$OPTARG
