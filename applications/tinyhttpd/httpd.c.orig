@@ -48,6 +48,13 @@ void unimplemented(int);
  * return.  Process the request appropriately.
  * Parameters: the socket connected to the client */
 /**********************************************************************/
+void *accept_request_thread(void *client)
+{
+ int *client_ptr = (int *)client;
+ accept_request(*client_ptr);
+ return NULL;
+}
+
 void accept_request(int client)
 {
  char buf[1024];
@@ -69,6 +76,8 @@ void accept_request(int client)
   i++; j++;
  }
  method[i] = '\0';
+
+ printf("received %s\n", method);
 
  if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
  {
@@ -311,7 +320,7 @@ int get_line(int sock, char *buf, int size)
  while ((i < size - 1) && (c != '\n'))
  {
   n = recv(sock, &c, 1, 0);
-  /* DEBUG printf("%02X\n", c); */
+  printf("%02X\n", c);
   if (n > 0)
   {
    if (c == '\r')
@@ -433,7 +442,7 @@ int startup(u_short *port)
   error_die("bind");
  if (*port == 0)  /* if dynamically allocating a port */
  {
-  int namelen = sizeof(name);
+  socklen_t namelen = sizeof(name);
   if (getsockname(httpd, (struct sockaddr *)&name, &namelen) == -1)
    error_die("getsockname");
   *port = ntohs(name.sin_port);
@@ -475,10 +484,10 @@ void unimplemented(int client)
 int main(void)
 {
  int server_sock = -1;
- u_short port = 0;
+ u_short port = 8080;
  int client_sock = -1;
  struct sockaddr_in client_name;
- int client_name_len = sizeof(client_name);
+ socklen_t client_name_len = sizeof(client_name);
  pthread_t newthread;
 
  server_sock = startup(&port);
@@ -492,7 +501,7 @@ int main(void)
   if (client_sock == -1)
    error_die("accept");
  /* accept_request(client_sock); */
- if (pthread_create(&newthread , NULL, accept_request, client_sock) != 0)
+ if (pthread_create(&newthread , NULL, accept_request_thread, (void *) &client_sock) != 0)
    perror("pthread_create");
  }
 
