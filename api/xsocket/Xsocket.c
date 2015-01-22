@@ -30,6 +30,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <errno.h>
+#include <fcntl.h>
 
 /*!
 ** @brief Create an XIA socket
@@ -61,6 +62,7 @@ int Xsocket(int family, int transport_type, int protocol)
 {
 	int rc;
 	int sockfd;
+	int flags = 0;
 
 	if (family != AF_XIA) {
 		LOG("error: the Xsockets API only supports the AF_XIA family");
@@ -74,11 +76,11 @@ int Xsocket(int family, int transport_type, int protocol)
 		return -1;
 	}
 
-	/*if (transport_type & SOCK_NONBLOCK || transport_type & SOCK_CLOEXEC) {
-		LOG("error: invalid flags passed as part of the treansport_type");
-		errno = EINVAL;
-		return -1;
-		}*/
+	if (transport_type & SOCK_NONBLOCK || transport_type & SOCK_CLOEXEC) {
+
+		flags = transport_type;
+		transport_type &= !(SOCK_NONBLOCK | SOCK_CLOEXEC);
+	}
 
 	switch (transport_type) {
 		case SOCK_STREAM:
@@ -127,6 +129,10 @@ setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	}
 
 	if (rc == 0) {
+
+		if (flags & SOCK_NONBLOCK) {
+			Xfcntl(sockfd, F_SETFL, O_NONBLOCK);
+		}
 		return sockfd;
 	}
 
