@@ -23,9 +23,9 @@ help ()
 {
 	cat << EOH
 
-Start or stop the XIA network services.
+Run the application using the XIA interposition library.
 
-usage: xwrap [-tixwvX] [-o <logfile>] cmd
+usage: xwrap [-tixwvXs] [-o <logfile>] cmd
 where:
   -X treat all sockets as XIA
   -t log at entry of every wrapped API call
@@ -34,6 +34,7 @@ where:
   -w log warnings and errors
   -v log everything in the wrapper
   -o <logfile> log to the specified file instead of stderr
+  -s run cmd inside strace
 
   cmd is the application and any command line arguments it requires
 
@@ -42,7 +43,7 @@ EOH
 }
 
 
-while getopts "o:tvwxX" opt; do
+while getopts "o:tvwxXs" opt; do
 	case $opt in
 		o)
 			export XWRAP_LOGFILE=$OPTARG
@@ -65,6 +66,9 @@ while getopts "o:tvwxX" opt; do
 		X)
 			export XWRAP_XIA=1
 			;;	 
+		s)
+			TRACE="strace"
+			;;
 		\?)
 			help
 			;;
@@ -74,4 +78,4 @@ done
 shift $((OPTIND-1))
 
 # ececute command
-$@
+$TRACE $@
