@@ -115,8 +115,13 @@ int Xpoll(struct pollfd *ufds, unsigned nfds, int timeout)
 		} else if (getSocketType(ufds[i].fd) == XSOCK_INVALID) {
 			//printf("socket %d is not a valid Xsocket\n", ufds[i].fd);
 
-			ufds[i].revents = POLLNVAL;
-			actionable++;
+// hack for poll in wrapper
+			pfd->set_port(0);
+			pfd->set_flags(0);
+			ufds[i].revents = 0;
+
+//			ufds[i].revents = POLLNVAL;
+//			actionable++;
 
 		} else {
 			active ++;
@@ -126,7 +131,9 @@ int Xpoll(struct pollfd *ufds, unsigned nfds, int timeout)
 			// find the port number associated with this Xsocket
 			struct sockaddr_in sin;
 			socklen_t slen = sizeof(sin);
+			setWrapped(ufds[i].fd, TRUE);
 			getsockname(ufds[i].fd, (struct sockaddr*)&sin, &slen);
+			setWrapped(ufds[i].fd, FALSE);			
 			//printf("sock %d, port %d, flags %x\n", ufds[i].fd, ntohs(sin.sin_port), ufds[i].events);
 
 			pfd->set_port(sin.sin_port);
@@ -140,7 +147,6 @@ int Xpoll(struct pollfd *ufds, unsigned nfds, int timeout)
 	if (actionable) {
 		// we hit an error condition, return results immediately
 		return actionable;
-
 	}
 
 	if (active == 0) {
@@ -150,23 +156,50 @@ int Xpoll(struct pollfd *ufds, unsigned nfds, int timeout)
 		return 0;
 	}
 
-	// because this isn't a socket from the suer, we will just block until it returns
+	// because this isn't a socket from the user, we will just block until it returns
 	// so don't set to nonblocking
 	if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
 		LOGF("error creating Xpoll socket: %s", strerror(errno));
 		return -1;
 	}
 
-	click_send(sock, &xsm);
+	// do this manually as we don't want to try to create an xsocket when in the xwrap wrapper
+	allocSocketState(sock, SOCK_DGRAM);
+	setWrapped(sock, TRUE);
+	setAPI(sock, TRUE);
 
+
+struct sockaddr_in sn;
+socklen_t snl = sizeof(sn);
+
+sn.sin_family = PF_INET;
+sn.sin_addr.s_addr = inet_addr("127.0.0.1");
+sn.sin_port = 0;
+bind(sock, (const struct sockaddr *)&sn, sizeof(sn));
+
+getsockname(sock, (struct sockaddr*)&sn, &snl);
+printf("xpoll port = %d\n", sn.sin_port);
+
+
+//printf("created API socket %d\n", sock);
+	click_send(sock, &xsm);
 	int rc = click_reply(sock, 0, &xsm);
 	close(sock);
+	freeSocketState(sock);
+
+xsm.PrintDebugString();
 
 	// FIXME check for errors here
-
+printf("click reply returns %d\n", rc);
 	xia::X_Poll_Msg *pout = xsm.mutable_x_poll();
 
+	pout->PrintDebugString();
+
 	rc = pout->nfds();
+
+printf("numfds = %d\n", rc);
+
+
 
 	if (rc == 0) {
 		// timeout occurred
@@ -177,6 +210,7 @@ int Xpoll(struct pollfd *ufds, unsigned nfds, int timeout)
 	} else {
 		// we got status back
 
+printf("Xpoll found %d\n", rc);
 		// loop thru result mapping port back onto socket
 		for (int i = 0; i < rc; i++) {
 				const xia::X_Poll_Msg::PollFD& pfd_out = pout->pfds(i);
