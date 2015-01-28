@@ -269,12 +269,14 @@ int _NewIP(sockaddr_x *sax, struct sockaddr_in *sin, int port)
 
 	sprintf(s1, "%s-%d", s, ntohs(sin->sin_port));
 
-	Graph g(sax);
+	if (sax) {
+		Graph g(sax);
 
-	std::string dag = g.dag_string();
+		std::string dag = g.dag_string();
 
-	ip2dag[s1] = dag;
-	dag2ip[dag] = s1;
+		ip2dag[s1] = dag;
+		dag2ip[dag] = s1;
+	}
 
 	// bump the ip address for next time
 	low_ip++;
@@ -1111,7 +1113,13 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 
 	TRACE();
 
-	if (FORCE_XIA()) {
+	if (hints) {
+		// see what type of address they want
+		if (hints->ai_family != AF_UNSPEC && hints->ai_family != AF_INET && hints->ai_family != AF_XIA)
+			tryxia = 0;
+	}
+
+	if (FORCE_XIA() && tryxia) {
 		sockaddr_x sax;
 		char s[64];
 		int socktype = 0;
@@ -1120,9 +1128,7 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 		int flags = 0;
 		int port;
 		socklen_t len = sizeof(sax);
-
-		// FIXME: this assumes that name is an IP string
-		//  instead of a name
+		struct sockaddr *sa;
 
 		if (hints) {
 			if (hints->ai_family != AF_UNSPEC && hints->ai_family != AF_INET) {
@@ -1137,10 +1143,9 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 		}
 
 
-
 		if (service) {
 			port = strtol(service, NULL, 10);
-	printf("serv ice:%d\n", port);
+	printf("service:%d\n", port);
 			if (errno == EINVAL) {
 				// FIXME:is this threadsafe???
 				struct servent *serv = getservbyname(service, NULL);
@@ -1155,28 +1160,43 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 			port = _NewPort();			
 		}
 
-		sprintf(s, "%s-%d", name, port);
+		if (strcmp(name, "0.0.0.0") == 0) {
+			// caller wants a sockaddr for itself
+			// create a fake ip address
+			// fill in sax with the bogus ip address
+
+			sa = (struct sockaddr *)calloc(sizeof(struct sockaddr), 1);
+			_NewIP(NULL, (struct sockaddr_in*)sa, htons(port));
+
+			rc = 0;
+		} else {
+
+			sprintf(s, "%s-%d", name, port);
 printf("addr=%s\n", s);
-		if (XgetDAGbyName(s, &sax, &len) < 0) {
-			printf("name lookup error\n");
-			errno = EAI_NONAME;
-			return -1;
-		}
+			if (XgetDAGbyName(s, &sax, &len) < 0) {
+				printf("name lookup error\n");
+				errno = EAI_NONAME;
+				return -1;
+			}
+
+			sa = (struct sockaddr *)calloc(sizeof(struct sockaddr), 1);
+			_NewIP(&sax, (sockaddr_in *)sa, htons(port));
+
 Graph g(&sax);
 printf("found name\n%s\n", g.dag_string().c_str());
-		struct addrinfo *ai = (struct addrinfo *)calloc(sizeof(struct addrinfo), 1);
+		}
 
+		struct addrinfo *ai = (struct addrinfo *)calloc(sizeof(struct addrinfo), 1);
 		// fill in the blanks
+
 		ai->ai_family    = family;
 		ai->ai_socktype  = socktype;
 		ai->ai_protocol  = protocol;
 		ai->ai_flags     = flags;
 		ai->ai_addrlen   = sizeof(struct sockaddr);
 		ai->ai_next      = NULL;
+		ai->ai_addr 	 = sa;
 
-		ai->ai_addr = (struct sockaddr *)calloc(sizeof(struct sockaddr), 1);
-
-		_NewIP(&sax, (sockaddr_in *)ai->ai_addr, htons(port));
 		*pai = ai;
 		rc = 0;
 
