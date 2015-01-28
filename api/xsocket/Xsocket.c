@@ -71,15 +71,14 @@ int Xsocket(int family, int transport_type, int protocol)
 	}
 
 	if (protocol != 0) {
-		LOG("error: the protocol field is not currently used in the Xsocket API");
-		errno = EINVAL;
-		return -1;
+		LOG("The protocol field is not currently used in the Xsocket API and will be ignored");
+//		errno = EINVAL;
+//		return -1;
 	}
 
 	if (transport_type & SOCK_NONBLOCK || transport_type & SOCK_CLOEXEC) {
-
 		flags = transport_type;
-		transport_type &= !(SOCK_NONBLOCK | SOCK_CLOEXEC);
+		transport_type &= 0xf;
 	}
 
 	switch (transport_type) {
@@ -132,6 +131,9 @@ setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
 		if (flags & SOCK_NONBLOCK) {
 			Xfcntl(sockfd, F_SETFL, O_NONBLOCK);
+		}
+		if (flags & SOCK_CLOEXEC) {
+			LOG("SOCK_CLOEXEC not supported, skipping...\n");
 		}
 		return sockfd;
 	}
