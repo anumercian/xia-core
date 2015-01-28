@@ -60,11 +60,14 @@ public:
 	void setDebug(int debug) { m_debug = debug; };
 	int getDebug() { return m_debug; };
 
+	void setAPI(int api) { api ? m_api++ : m_api--; };
+	int isAPI() { return m_api != 0; };
+
 	void setRecvTimeout(struct timeval *timeout) { m_timeout.tv_sec = timeout->tv_sec; m_timeout.tv_usec = timeout->tv_usec; };
 	void getRecvTimeout(struct timeval *timeout) {timeout->tv_sec = m_timeout.tv_sec; timeout->tv_usec = m_timeout.tv_usec; };
 
 	void setError(int error) { m_error = error; };
-	int getError() { return m_error; m_error = 0; };
+	int getError() { int e = m_error; m_error = 0; return e; };
 
 	const sockaddr_x *peer() { return m_peer; };
 	int setPeer(const sockaddr_x *peer);
@@ -77,6 +80,7 @@ private:
 	int m_wrapped;	// hack for dealing with xwrap stuff
 	int m_debug;
 	int m_error;
+	int m_api;
 	char *m_buf;
 	sockaddr_x *m_peer;
 	unsigned m_bufLen;
@@ -121,6 +125,7 @@ void SocketState::init()
 	m_sequence = 1;
 	m_debug = 0;
 	m_error = 0;
+	m_api = 0;
 	m_timeout.tv_sec = 0;
 	m_timeout.tv_usec = 0;
 	pthread_mutex_init(&m_sequence_lock, NULL);
@@ -252,10 +257,10 @@ void SocketMap::add(int sock, int tt)
 	pthread_rwlock_wrlock(&rwlock);
 	if (state->sockets[sock] == 0) {
 //	if (state->sockets.find(sock) == state->sockets.end()) {
-		printf("CORRECT WAY TO ADD SOCKET STATE %d %d\n", sock, tt);
+//		printf("CORRECT WAY TO ADD SOCKET STATE %d %d\n", sock, tt);
 		state->sockets[sock] = new SocketState(tt);
 	} else {
-		printf("THIS SHOULD NOT HAPPEN! %d\n", sock);
+//		printf("THIS SHOULD NOT HAPPEN! %d\n", sock);
 //		SocketState *sstate = SocketMap::getMap()->get(sock);
 //		sstate->init();
 //		sstate->setTransportType(tt);
@@ -297,13 +302,13 @@ int SocketState::setPeer(const sockaddr_x *peer)
 
 void allocSocketState(int sock, int tt)
 {
-	printf("ALLOCSOCKETSTATE %d\n", sock);
+//	printf("ALLOCSOCKETSTATE %d\n", sock);
 	SocketMap::getMap()->add(sock, tt);
 }
 
 void freeSocketState(int sock)
 {
-	printf("FREESOCKETSTATE %d\n", sock);
+//	printf("FREESOCKETSTATE %d\n", sock);
 	SocketMap::getMap()->remove(sock);
 }
 
@@ -331,6 +336,22 @@ void setConnState(int sock, int conn)
 	SocketState *sstate = SocketMap::getMap()->get(sock);
 	if (sstate)
 		sstate->setConnState(conn);
+}
+
+int isAPI(int sock)
+{
+	SocketState *sstate = SocketMap::getMap()->get(sock);
+	if (sstate)
+		return sstate->isAPI();
+	else
+		return FALSE;
+}
+
+void setAPI(int sock, int api)
+{
+	SocketState *sstate = SocketMap::getMap()->get(sock);
+	if (sstate)
+		sstate->setAPI(api);
 }
 
 int isWrapped(int sock)

@@ -192,7 +192,11 @@ printf("in the cache!\n");
 			FD_SET(sock, &fds);
 			tv.tv_sec = 0;
 			tv.tv_usec = 10000;
+			setAPI(sock, TRUE);
+			setWrapped(sock, TRUE);
 			rc = select(sock+1, &fds, NULL, NULL, &tv);
+			setWrapped(sock, FALSE);
+			setAPI(sock, FALSE);
 			if (rc == 0)
 				continue;
 			else if (rc < 0) {
