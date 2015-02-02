@@ -136,6 +136,9 @@ void __xwrap_setup()
 	srand(time(NULL));
 	_wrap_socket = 1;
 
+	low_ip = (rand() % 253) + 1;
+	high_ip = rand() % 254;
+
 	if (getenv("XWRAP_XIA") != NULL)
 		_pure_xia = 1;
 
@@ -606,6 +609,7 @@ ssize_t recvfrom(int fd, void *buf, size_t n, int flags, struct sockaddr *addr, 
 	int rc;
 	sockaddr_x sax;
 	struct sockaddr *ipaddr;
+	socklen_t slen;
 
 	TRACE();
 
@@ -613,12 +617,15 @@ ssize_t recvfrom(int fd, void *buf, size_t n, int flags, struct sockaddr *addr, 
 		XIAIFY();
 
 		if (FORCE_XIA()) {
+			slen = (socklen_t)sizeof(sax);
 			ipaddr = addr;
 			addr = (struct sockaddr*)&sax;
+			*addr_len = sizeof(addr);
+			// FIXME we should check to see if addr and addr_len are valid
 		}
 
 		markWrapped(fd);
-		rc = Xrecvfrom(fd, buf, n, flags, addr, addr_len);
+		rc = Xrecvfrom(fd, buf, n, flags, addr, &slen);
 		markUnwrapped(fd);
 
 		if (FORCE_XIA()) {
