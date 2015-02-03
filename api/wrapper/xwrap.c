@@ -308,14 +308,14 @@ char *_RandomSID(char *buf, unsigned len)
 }
 
 // convert a IPv4 sock addr into a sting in the form of A.B.C.D-port
-char *_IpString(char *s, struct sockaddr_in* sa)
+char *_IpString(char *s, const struct sockaddr_in* sa)
 {
 	// FIXME: this doesn't seem threadsafe
 	char *ip = inet_ntoa(sa->sin_addr);
 
 	// make a name from the ip address and port
 	sprintf(s, "%s-%u", ip, ntohs(sa->sin_port));
-	printf("IPSTRING %s\n", s);
+//	MSG("%s\n", s);
 	return s;
 }
 
@@ -323,17 +323,25 @@ char *_IpString(char *s, struct sockaddr_in* sa)
 int _i2x(struct sockaddr_in *sin, sockaddr_x *sax)
 {
 	char s[64];
-	std::string dag = ip2dag[_IpString(s, sin)];
+	int rc = 0;
 
-	printf("i2x dag=%s\n", dag.c_str());
+	ip2dag_t::iterator it = ip2dag.find(_IpString(s, sin));
 
-	Graph g(dag);
-	g.fill_sockaddr(sax);
+	if (it != ip2dag.end()) {
 
-	// FIXME: do error checking here
-	// return -1 if the lookup fails
+		std::string dag = it->second;
 
-	return 0;
+		MSG("Found: %s -> %s\n", s, dag.c_str());
+
+		Graph g(dag);
+		g.fill_sockaddr(sax);
+
+	} else {
+		MSG("No mapping for %s\n", s);
+		rc = -1;
+	}
+
+	return rc;
 }
 
 // map from XIA to IP
@@ -342,20 +350,28 @@ int _x2i(sockaddr_x *sax, sockaddr_in *sin)
 	// FIXME: this depends on the created dag string always looking the same!
 	char name[64];
 	Graph g(sax);
-	strcpy(name, dag2ip[g.dag_string()].c_str());
+	int rc = 0;
 
-	// chop name into ip address and port
-	char *p = strchr(name, '-');
-	*p++ = 0;
+	dag2ip_t::iterator it = dag2ip.find(g.dag_string());
 
-	inet_aton(name, &sin->sin_addr);
-	sin->sin_port = atoi(p);
-	sin->sin_family = AF_INET;
+	if (it != dag2ip.end()) {
+		strcpy(name, it->second.c_str());
+		MSG("Found: %s\n", name);
 
-	// FIXME: do error checking here
-	// return -1 if the lookup fails
+		// chop name into ip address and port
+		char *p = strchr(name, '-');
+		*p++ = 0;
+
+		inet_aton(name, &sin->sin_addr);
+		sin->sin_port = atoi(p);
+		sin->sin_family = AF_INET;
+
+	} else {
+		rc = -1;
+		MSG("No mapping for %s\n", g.dag_string().c_str());
+	}
 	
-	return 0;	
+	return rc;
 }
 
 // create a dag with sid for this sockaddr and register it with
@@ -386,6 +402,35 @@ int _Register(const struct sockaddr *addr, socklen_t len)
 	return 1;
 }
 
+int _Lookup(const struct sockaddr_in *addr, sockaddr_x *sax)
+{
+	int rc = 0;
+	char s[64];
+	socklen_t len = sizeof(sockaddr_x);
+
+	if (_i2x((struct sockaddr_in*)addr, sax) == 0)
+		return rc;
+
+	_IpString(s, addr);
+
+	MSG("Looking up mapping for %s\n", s);
+
+	if (XgetDAGbyName(s, sax, &len) < 0) {
+		WARNING("Mapping lookup failed for %s\n", s);
+		rc = -1;
+	} else {
+
+		Graph g(sax);
+
+		std::string dag = g.dag_string();
+
+		ip2dag[s] = dag;
+		dag2ip[dag] = s;
+	}
+
+	return rc;
+}
+
 /******************************************************************************
 **
 ** FUNCTION REMAPPINGS START HERE
@@ -397,7 +442,7 @@ int socket(int domain, int type, int protocol)
 	int fd;
 	TRACE();
 
-//printf("SOCKET t:%d p:%d %d %d\n", type, protocol, SOCK_STREAM, SOCK_DGRAM);
+//	MSG("SOCKET t:%d p:%d %d %d\n", type, protocol, SOCK_STREAM, SOCK_DGRAM);
 	if ((domain == AF_XIA || (domain == AF_INET && FORCE_XIA())) && _wrap_socket) {
 		XIAIFY();
 
@@ -506,7 +551,7 @@ int accept(int fd, struct sockaddr *addr, socklen_t *addr_len)
 	struct sockaddr *ipaddr;
 	socklen_t xlen;
 
-	printf("ACCEPT:%d\n", fd);
+	MSG("%d\n", fd);
 	TRACE();
 	if (isXsocket(fd)) {
 		XIAIFY();
@@ -557,7 +602,9 @@ ssize_t recv(int fd, void *buf, size_t n, int flags)
 {
 	int rc;
 	TRACE();
-printf("recv %d %ld\n", fd, n);
+
+	//MSG("recv %d %ld\n", fd, n);
+
 	if (shouldWrap(fd)) {
 		XIAIFY();
 		markWrapped(fd);
@@ -567,30 +614,31 @@ printf("recv %d %ld\n", fd, n);
 		rc = __real_recv(fd, buf, n, flags);
 	}
 
-	printf("recv exiting %d %s\n", rc, strerror(errno));
+	//MSG("recv exiting %d %s\n", rc, strerror(errno));
 	return rc;
 }
 
 ssize_t sendto(int fd, const void *buf, size_t n, int flags, const struct sockaddr *addr, socklen_t addr_len)
 {
 	int rc;
-	TRACE();
 	sockaddr_x sax;
 
+	TRACE();
 
 	if (shouldWrap(fd)) {
 		XIAIFY();
 
 		if (FORCE_XIA()) {
-			// FIXME: this will currently fail if the application creates the sockaddr
-			// internally instead of getting it from getaddrinfo, we probably need
-			// to add a name lookup if the mapping lookup fails
 
-			// create a mapping from IP/port to a dag and register it
-			_Register(addr, addr_len);
+			if (_Lookup((sockaddr_in *)addr, &sax) != 0) {
+				char ips[64];
+				_IpString(ips, (sockaddr_in*)addr);
+				WARNING("Unable to lookup %s\n", ips);
+				errno = EINVAL;	// FIXME: is there a better return we can use here?
+				return -1;
+			}
 
-			// convert the sockaddr to a sockaddr_x
-			_i2x((struct sockaddr_in*)addr, &sax);
+			addr_len = sizeof(sax);
 			addr = (struct sockaddr*)&sax;
 		}
 
@@ -601,6 +649,7 @@ ssize_t sendto(int fd, const void *buf, size_t n, int flags, const struct sockad
 	} else {
 		rc = __real_sendto(fd, buf, n, flags, addr, addr_len);
 	}
+
 	return rc;
 }
 
@@ -727,13 +776,13 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
 
 			if (found) {
 				if (getSocketType(i) != XSOCK_INVALID) {
-//					printf("select found socket %d\n", i);
+//					MSG("select found socket %d\n", i);
 					if (!isAPI(i)) {
-//						printf("it is not an API socket\n");
+//						MSG("it is not an API socket\n");
 						xify = TRUE;
 					}
 					else {
-//						printf("it is an API socket!\n");
+//						MSG("it is an API socket!\n");
 					}
 					break;
 				}
@@ -766,7 +815,8 @@ int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struc
 int __poll_chk(struct pollfd *fds, nfds_t nfds, int timeout, __SIZE_TYPE__ __fdslen)
 {
 	TRACE();
-	printf("POLL CHECK ****************************************************\n");
+
+	MSG("POLL CHECK ****************************************************\n");
 	return __real___poll_chk(fds, nfds, timeout, __fdslen);
 }
 
@@ -787,17 +837,17 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout)
 	memcpy(xfds, fds, nfds * sizeof(struct pollfd));
 	memcpy(ffds, fds, nfds * sizeof(struct pollfd));
 
-printf("POLL**********************************************\n");
+//MSG("POLL**********************************************\n");
 
 	for (unsigned i = 0; i < nfds; i++) {
 		if (getSocketType(fds[i].fd) != XSOCK_INVALID) {
-			MSG("We found an XIA socket %d\n", fds[i].fd);
+//			MSG("We found an XIA socket %d\n", fds[i].fd);
 			xify = TRUE;
 
 			// stop on the descriptor in the fd set
 			ffds[i].fd = -ffds[i].fd;
 		} else {
-			MSG("We found a file descriptor %d\n", fds[i].fd);
+//			MSG("We found a file descriptor %d\n", fds[i].fd);
 			normal = TRUE;
 
 			// stop on the descriptor in the xia set
@@ -807,21 +857,21 @@ printf("POLL**********************************************\n");
 	}
 
 	if (xify && !normal) {
-		MSG("Doing XIA only poll\n");
+//		MSG("Doing XIA only poll\n");
 		_wrap_socket = 0;
 		rc = Xpoll(fds, nfds, timeout);
 		_wrap_socket = 1;
 	} else if (normal && !xify) {
-		MSG("Doing fd only poll\n");
+//		MSG("Doing fd only poll\n");
 		rc = __real_poll(fds, nfds, timeout);
 	} else {
 		// we need to do both kinds of polls
 		int rcx, rcf;
 
-		MSG("doing dual poll\n");
+//		MSG("doing dual poll\n");
 
 		if (timeout == 0) {
-			MSG("zero timeout poll\n");
+//			MSG("zero timeout poll\n");
 			// just check and return
 			_wrap_socket = 0;
 			rcx = Xpoll(xfds, nfds, 0);
@@ -833,24 +883,24 @@ printf("POLL**********************************************\n");
 			struct timeval start, now;
 			int delay = 100;	// find optimal value for this
 
-			MSG("poll timeout = %d\n", timeout); 
+//			MSG("poll timeout = %d\n", timeout); 
 
 			// ugh, we have to loop and do short timeouts on each set of pollfds
 			// it's ugly, but I don't see any other way to handle it
 			// FIXME: consider spinning up 2 threads to do it
 
-			MSG("start = %d:%d\n", (unsigned)start.tv_sec, (unsigned)start.tv_usec);
+//			MSG("start = %d:%d\n", (unsigned)start.tv_sec, (unsigned)start.tv_usec);
 
 			gettimeofday(&start, NULL);
 			for (;;) {
 
-//MSG("calling real poll\n");
+//				MSG("calling real poll\n");
 				rc = __real_poll(fds, nfds, delay);
 //				MSG("real poll returns %d\n", rc);
 				if (rc != 0)
 					break;
 
-//MSG("calling xpoll\n");
+//				MSG("calling xpoll\n");
 				_wrap_socket = 0;
 				rc = Xpoll(xfds, nfds, delay * 100);
 				_wrap_socket = 1;
@@ -881,7 +931,7 @@ printf("POLL**********************************************\n");
 		if (rcx > 0) {
 			for (unsigned i = 0; i < nfds; i++) {
 				if (xfds[i].revents != 0 && xfds[i].revents != POLLNVAL) {
-					MSG("Got an XIA hit on fd %d:%d\n", xfds[i].fd, xfds[i].revents);
+//					MSG("Got an XIA hit on fd %d:%d\n", xfds[i].fd, xfds[i].revents);
 					fds[i].revents = xfds[i].revents;
 				}
 			}
@@ -890,7 +940,7 @@ printf("POLL**********************************************\n");
 		if (rcf > 0) {
 			for (unsigned i = 0; i < nfds; i++) {
 				if (xfds[i].revents != 0) {
-					MSG("Got a normal hit on fd %d\n", fds[i].fd);
+//					MSG("Got a normal hit on fd %d\n", fds[i].fd);
 					fds[i].revents = ffds[i].revents;
 				}
 			}
@@ -983,7 +1033,7 @@ int close(int fd)
 {
 	int rc;
 	TRACE();
-//printf("XXXXXXXXX CLOSE %d %d %d\n", fd, isXsocket(fd), isWrapped(fd));
+
 	if (shouldWrap(fd)) {
 		XIAIFY();
 		markWrapped(fd);
@@ -1139,11 +1189,11 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 
 		if (hints) {
 			if (hints->ai_family != AF_UNSPEC && hints->ai_family != AF_INET) {
-				printf("The XIA wrapper only supports AF_INET mappings.\n");
+				WARNING("The XIA wrapper only supports AF_INET mappings.\n");
 				errno = EAI_FAMILY;
 				return -1;
 			} else if (hints->ai_flags != 0) {
-				printf("Flags to getaddrinfo are not currently implemented.\n");
+				WARNING("Flags to getaddrinfo are not currently implemented.\n");
 			}
 			socktype = hints->ai_socktype;
 			protocol = hints->ai_protocol;
@@ -1152,7 +1202,7 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 
 		if (service) {
 			port = strtol(service, NULL, 10);
-	printf("service:%d\n", port);
+			MSG("service:%d\n", port);
 			if (errno == EINVAL) {
 				// FIXME:is this threadsafe???
 				struct servent *serv = getservbyname(service, NULL);
@@ -1179,9 +1229,9 @@ int getaddrinfo (const char *name, const char *service, const struct addrinfo *h
 		} else {
 
 			sprintf(s, "%s-%d", name, port);
-printf("addr=%s\n", s);
+			MSG("addr=%s\n", s);
 			if (XgetDAGbyName(s, &sax, &len) < 0) {
-				printf("name lookup error\n");
+				MSG("name lookup error\n");
 				errno = EAI_NONAME;
 				return -1;
 			}
@@ -1190,7 +1240,7 @@ printf("addr=%s\n", s);
 			_NewIP(&sax, (sockaddr_in *)sa, htons(port));
 
 Graph g(&sax);
-printf("found name\n%s\n", g.dag_string().c_str());
+MSG("found name\n%s\n", g.dag_string().c_str());
 		}
 
 		struct addrinfo *ai = (struct addrinfo *)calloc(sizeof(struct addrinfo), 1);
